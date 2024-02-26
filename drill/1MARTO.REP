@@ -1,0 +1,24 @@
+POST PROCESSOR REPORT
+---------------------
+
+LAYOUT NAME    :-  1MARTO.CDO
+LAYOUT TITLE   :-  
+CADSTAR PCB LAYOUT
+
+DRILL HOLE REPORT 
+-----------------
+
+ SIZE    COUNT   XMIN    YMIN    XMAX    YMAX   TOOL        DESCRIPTION
+
+   20        5    400     400    3450    3475      1                          
+   32        4   1010    1225    1850    1850      2                          
+   36       37   1125     875    2725    2550      3                          
+   44       17    650     950    2300    3275      4                          
+   52        3    625    3090     825    3090      5                          
+   60       10   1475    1075    3050    2775      6                          
+  120        3    670     695    3150    3175      7                          
+
+       7  DRILLS USED
+      79  HOLES DRILLED
+
+OUTPUT FILE NAME : 1MARTO.DEL

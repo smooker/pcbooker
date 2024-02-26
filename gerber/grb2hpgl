@@ -1,0 +1,22 @@
+#!/bin/bash
+
+rm *.ngc
+rm *.svg
+rm *.hpgl
+
+fullfile=$1;
+filename=$(basename -- "$fullfile")
+extension="${filename##*.}"
+filename="${filename%.*}"
+isowidth=$2
+scalex=$3
+scaley=$4
+
+echo "filename: $filename";
+echo "ext: $extension";
+#exit;
+
+# novo
+~/src/pcb2gcode/pcb2gcode --metric 1 --metricoutput 1 --zchange-absolute on --path-finding-limit 0 --voronoi 0 --cutter-diameter 0.05mm --isolation-width $isowidth --offset 0.050mm --tolerance 0.001 --optimise 0.010mm --tsp-2opt 0 --zwork -5mm --mill-feed 100 --mill-speed 105 --zsafe 20.0mm --zchange 25.0mm --front $fullfile  --basename $filename
+gcode2hpgl.pl ./${filename}_front.ngc ./$filename.hpgl $scalex $scaley 
+
