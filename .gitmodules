@@ -1,0 +1,6 @@
+[submodule "pcb2gcode"]
+	path = pcb2gcode
+	url = https://github.com/pcb2gcode/pcb2gcode.git
+[submodule "bCNC"]
+	path = bCNC
+	url = ssh://git@github.com/vlachoudis/bCNC.git
