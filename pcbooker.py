@@ -100,11 +100,16 @@ def plot_linestrings(ax, paths, color='green', linewidth=1.0, alpha=0.8):
 class LayerWidget(QFrame):
     """Single layer row with visibility, iso, mode, offset controls."""
 
+    selected = False
+    _normal_style = ""
+    _selected_style = "background-color: #335588; border: 1px solid #5588cc;"
+
     def __init__(self, name, color, on_change=None, iso_controls=True,
-                 info_text=None, parent=None):
+                 info_text=None, selectable=False, parent=None):
         super().__init__(parent)
         self.layer_name = name
         self._on_change = on_change
+        self._selectable = selectable
         self.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
 
         layout = QHBoxLayout(self)
@@ -175,6 +180,21 @@ class LayerWidget(QFrame):
             info.setStyleSheet("color: #888; font-size: 10px;")
             layout.addWidget(info)
 
+    def set_selected(self, sel):
+        self.selected = sel
+        if sel:
+            self.setStyleSheet(self._selected_style)
+        else:
+            self.setStyleSheet(self._normal_style)
+
+    def mousePressEvent(self, event):
+        if self._selectable:
+            # Let the parent window handle selection logic
+            win = self.window()
+            if hasattr(win, '_on_layer_clicked'):
+                win._on_layer_clicked(self, event)
+        super().mousePressEvent(event)
+
     def _changed(self):
         if self._on_change:
             self._on_change()
@@ -195,6 +215,7 @@ class PCBookerWindow(QMainWindow):
         self.problems = {}
         self.layer_widgets = {}
         self.iso_widgets = {}   # isolation layer widgets (separate)
+        self._last_clicked_iso = None  # for shift-select range
 
         self._build_ui()
 
@@ -227,6 +248,7 @@ class PCBookerWindow(QMainWindow):
             ("Check Contours",       self.check_contours),
             ("Gap Analysis",         self.gap_analysis),
             ("Generate Isolation",   self.generate_isolation),
+            ("Delete Selected",      self.delete_selected_iso),
             ("Export HPGL",          self.export_hpgl),
         ]
         for text, slot in buttons:
@@ -434,18 +456,67 @@ class PCBookerWindow(QMainWindow):
         self.statusBar().showMessage("Gap analysis complete.")
 
     def _add_iso_layer(self, iso_name, paths, info_text, color=None):
-        """Add an isolation result as a toggleable layer."""
+        """Add an isolation result as a toggleable, selectable layer."""
         if not paths:
             return 0
         self.iso_paths[iso_name] = paths
         iso_widget = LayerWidget(iso_name, color or ISOLATION_COLOR,
                                   on_change=self.refresh_view,
                                   iso_controls=False,
-                                  info_text=info_text)
+                                  info_text=info_text,
+                                  selectable=True)
         self._layer_layout.insertWidget(
             self._layer_layout.count() - 1, iso_widget)
         self.iso_widgets[iso_name] = iso_widget
         return len(paths)
+
+    def _on_layer_clicked(self, widget, event):
+        """Handle click on iso layer for selection (Ctrl/Shift)."""
+        from PyQt5.QtCore import Qt as QtC
+        modifiers = QApplication.keyboardModifiers()
+        iso_names = list(self.iso_widgets.keys())
+
+        if widget.layer_name not in self.iso_widgets:
+            return
+
+        if modifiers & QtC.ControlModifier:
+            # Ctrl+click: toggle this one
+            widget.set_selected(not widget.selected)
+        elif modifiers & QtC.ShiftModifier:
+            # Shift+click: range select from last clicked
+            if self._last_clicked_iso and self._last_clicked_iso in iso_names:
+                idx_a = iso_names.index(self._last_clicked_iso)
+                idx_b = iso_names.index(widget.layer_name)
+                lo, hi = min(idx_a, idx_b), max(idx_a, idx_b)
+                for i, name in enumerate(iso_names):
+                    self.iso_widgets[name].set_selected(lo <= i <= hi)
+            else:
+                widget.set_selected(True)
+        else:
+            # Plain click: select only this one
+            for w in self.iso_widgets.values():
+                w.set_selected(False)
+            widget.set_selected(True)
+
+        self._last_clicked_iso = widget.layer_name
+
+    def delete_selected_iso(self):
+        """Delete selected isolation layers."""
+        to_delete = [name for name, w in self.iso_widgets.items() if w.selected]
+        if not to_delete:
+            self.statusBar().showMessage("No iso layers selected. "
+                                          "Click to select, Ctrl/Shift for multi.")
+            return
+
+        for name in to_delete:
+            w = self.iso_widgets.pop(name)
+            self._layer_layout.removeWidget(w)
+            w.deleteLater()
+            self.iso_paths.pop(name, None)
+
+        self._last_clicked_iso = None
+        self.statusBar().showMessage(f"Deleted {len(to_delete)} iso layer(s).")
+        self.refresh_view()
 
     def generate_isolation(self):
         # Clear old isolation paths and widgets
