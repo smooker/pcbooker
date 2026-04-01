@@ -101,44 +101,62 @@ def plot_linestrings(ax, paths, color='green', linewidth=1.0, alpha=0.8):
                 linewidth=linewidth, alpha=alpha)
 
 
-class LayerPanel(ttk.Frame):
+class LayerPanel(tk.Frame):
     """Panel for a single layer with controls."""
 
     def __init__(self, parent, name, color, **kwargs):
-        super().__init__(parent, **kwargs)
+        super().__init__(parent, bd=1, relief=tk.GROOVE, **kwargs)
         self.layer_name = name
 
-        self.visible = tk.BooleanVar(value=True)
+        self.visible = tk.IntVar(value=1)
         self.mode = tk.StringVar(value='outline')
         self.offset = tk.DoubleVar(value=0.1)
-        self.isolate = tk.BooleanVar(value=False)
+        self.isolate = tk.IntVar(value=0)
 
-        # Row layout
-        cb = ttk.Checkbutton(self, variable=self.visible, text='')
-        cb.pack(side=tk.LEFT, padx=2)
+        # Visible toggle
+        self._vis_btn = tk.Button(self, text='V', width=2,
+                                  relief=tk.SUNKEN, bg='#004400', fg='white',
+                                  command=self._on_vis_click)
+        self._vis_btn.grid(row=0, column=0, padx=1, pady=1)
 
         # Color indicator
-        clr = tk.Canvas(self, width=12, height=12, bg=color,
-                        highlightthickness=1, highlightbackground='gray')
-        clr.pack(side=tk.LEFT, padx=2)
+        tk.Label(self, text='  ', bg=color, width=2).grid(row=0, column=1, padx=1)
 
-        lbl = ttk.Label(self, text=name, width=15, anchor='w')
-        lbl.pack(side=tk.LEFT, padx=2)
+        # Layer name
+        tk.Label(self, text=name, width=14, anchor='w').grid(row=0, column=2, padx=2)
 
-        # Isolate checkbox
-        iso_cb = ttk.Checkbutton(self, variable=self.isolate, text='Iso')
-        iso_cb.pack(side=tk.LEFT, padx=2)
+        # Mode
+        tk.OptionMenu(self, self.mode, 'outline', 'inline').grid(row=0, column=3, padx=1)
 
-        # Mode dropdown
-        mode_cb = ttk.Combobox(self, textvariable=self.mode,
-                               values=['outline', 'inline'], width=7, state='readonly')
-        mode_cb.pack(side=tk.LEFT, padx=2)
+        # Offset
+        tk.Label(self, text='mm:').grid(row=0, column=4)
+        tk.Spinbox(self, textvariable=self.offset,
+                   from_=0.01, to=5.0, increment=0.05, width=5).grid(row=0, column=5, padx=1)
 
-        # Offset spinbox
-        ttk.Label(self, text='mm:').pack(side=tk.LEFT)
-        spn = ttk.Spinbox(self, textvariable=self.offset,
-                          from_=0.01, to=5.0, increment=0.05, width=5)
-        spn.pack(side=tk.LEFT, padx=2)
+        # Iso toggle — LAST to avoid being covered by OptionMenu
+        self._iso_btn = tk.Button(self, text='[ ] Iso', width=7,
+                                  relief=tk.RAISED, bg='#444444', fg='white',
+                                  command=self._on_iso_click)
+        self._iso_btn.grid(row=0, column=6, padx=3, pady=1)
+
+    def _on_vis_click(self, event=None):
+        val = 1 - self.visible.get()
+        self.visible.set(val)
+        print(f"  VIS {self.layer_name}: visible={val}")
+        self._vis_btn.config(
+            relief=tk.SUNKEN if val else tk.RAISED,
+            bg='#004400' if val else '#333333'
+        )
+
+    def _on_iso_click(self, event=None):
+        val = 1 - self.isolate.get()
+        self.isolate.set(val)
+        print(f"  ISO {self.layer_name}: isolate={val}")
+        self._iso_btn.config(
+            text='[X] Iso' if val else '[ ] Iso',
+            relief=tk.SUNKEN if val else tk.RAISED,
+            bg='#006600' if val else '#444444'
+        )
 
 
 class PCBookerApp:
@@ -273,7 +291,9 @@ class PCBookerApp:
             # Convert to Shapely
             geoms = gerber_loader.layer_to_polygons(layer)
             self.geometries[name] = geoms
-            self.merged[name] = gerber_loader.layer_to_merged(layer)
+            merged = gerber_loader.layer_to_merged(layer)
+            self.merged[name] = merged
+            print(f"  Loaded {name}: {len(geoms)} geoms, merged={type(merged).__name__ if merged else None}")
 
         self.status.set(f'Loaded {len(self.layers)} layers. '
                         f'Total objects: {sum(len(g) for g in self.geometries.values())}')
@@ -310,17 +330,24 @@ class PCBookerApp:
         count = 0
 
         for name, panel in self.layer_panels.items():
-            if not panel.isolate.get():
+            iso_val = panel.isolate.get()
+            print(f"  Layer {name}: iso={iso_val}")
+            if not iso_val:
                 continue
 
             merged = self.merged.get(name)
+            print(f"  Layer {name}: merged={type(merged).__name__ if merged else 'None'}, "
+                  f"geoms={len(self.geometries.get(name, []))}")
             if merged is None:
+                print(f"  WARNING: {name} has no merged geometry!")
                 continue
 
             offset = panel.offset.get()
             mode = panel.mode.get()
+            print(f"  Generating: offset={offset}, mode={mode}")
 
             paths = isolation.isolation_paths(merged, offset, mode)
+            print(f"  Result: {len(paths)} paths")
             if paths:
                 self.iso_paths[name] = paths
                 count += len(paths)
