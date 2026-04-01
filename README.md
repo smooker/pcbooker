@@ -1,53 +1,105 @@
 # PCBooker
 
-PCB fabrication toolkit — Gerber viewer, isolation routing, HPGL export for laser engraving.
+Инструмент за подготовка на PCB за лазерно гравиране — Gerber визуализация, изолационно фрезоване, HPGL експорт.
 
-## PCBooker GUI (v0.1)
+## Какво е PCBooker
 
-Python GUI for PCB laser engraving preparation:
-- Multi-layer Gerber loading (auto layer detection via gerbonara)
-- Per-layer controls: visible, outline/inline mode, offset in mm
-- Isolation path generation (Shapely polygon buffer)
-- Open contour detection with visual gap markers
-- HPGL export for vector laser engraver
+PCBooker зарежда Gerber файлове (от KiCad, CADSTAR, Eagle и др.), показва ги графично, генерира изолационни пътеки около медните следи и експортира във формат HPGL за векторен лазерен гравьор (TRUMPF и др.).
 
-### Dependencies
+Целта е да замени ръчния процес с grb2hpgl/pcb2gcode и да даде визуален контрол над изолацията преди рязане.
 
-    pip install gerbonara shapely matplotlib
+## Възможности
 
-### Usage
+- Зареждане на Gerber файлове (единични или цяла директория)
+- Автоматично разпознаване на слоеве (top/bottom copper, mask, silk, drill)
+- Визуализация с matplotlib — zoom, pan, слоеве с toggle видимост
+- Изолационни пътеки (outline/inline) с конфигурируем offset в mm
+- Интелигентно сливане на близки пътеки (min gap) — предотвратява двойно лазерно изгаряне
+- Дедупликация при експорт (dedup) — вдига писалката когато минава близо до вече начертан път
+- Gap analysis — анализ на тесни места между медни следи
+- Проверка за отворени контури (gap detection)
+- Изолацията се показва като отделен слой с toggle видимост
+- HPGL експорт за векторен лазер (0.025mm/unit)
 
-    python3 pcbooker.py                     # open GUI
-    python3 pcbooker.py /path/to/gerbers    # auto-load Gerber directory
+## Инсталация и стартиране
 
-## Legacy Tools
+Всичко е self-contained в папката на проекта. `run.sh` автоматично създава Python venv и инсталира зависимостите:
+
+    ./run.sh                          # празен GUI
+    ./run.sh testfiles/1marto.GTL     # зареди тестов файл
+    ./run.sh /path/to/gerber/dir/     # зареди цяла директория
+
+При първо стартиране се създава `venv/` с gerbonara, shapely, matplotlib, PyQt5.
+
+### Ръчна инсталация (ако run.sh не работи)
+
+    python3 -m venv venv
+    ./venv/bin/pip install -r requirements.txt
+    ./venv/bin/python3 pcbooker.py
+
+## Употреба
+
+### Зареждане
+
+- **Load Gerbers (dir)** — избира директория, зарежда всички Gerber/drill файлове
+- **Load Files** — избира конкретни файлове
+
+### Изолация
+
+1. Чекни **Iso** на слоя (обикновено copper)
+2. Избери **outline** (разширява навън) или **inline** (свива навътре)
+3. Задай **offset в mm** (разстояние от медта до лазерния разрез)
+4. Натисни **Generate Isolation**
+5. Изолацията се появява като отделен слой — можеш да скриеш оригинала за по-ясен преглед
+
+### Настройки за лазера
+
+- **Min gap** — минимално разстояние между пътеки. Пътеки по-близо от тази стойност се сливат в една. Задай на ширината на лазерния лъч.
+- **Dedup** — при експорт, ако нов път минава по-близо от тази стойност до вече начертан — писалката се вдига. Предотвратява двойно преминаване и прогаряне на платката.
+
+### Анализ
+
+- **Check Contours** — проверява за отворени контури (незатворени форми)
+- **Gap Analysis** — показва тесни места между медни следи спрямо зададения offset
+
+### Експорт
+
+- **Export HPGL** — записва изолационните пътеки в HPGL формат
+- Експортират се само видимите isolation слоеве
+- Прилага се dedup преди записа
+
+## Файлова структура
+
+    pcbooker.py       — GUI (PyQt5 + matplotlib)
+    gerber_loader.py  — Gerber парсинг (gerbonara) и конвертиране към Shapely
+    isolation.py      — Изолационни пътеки, gap merge, dedup
+    contour_check.py  — Проверка за отворени контури
+    hpgl_export.py    — HPGL генератор (0.025mm/unit, PU/PD команди)
+    run.sh            — Bootstrap: venv + deps + стартиране
+    requirements.txt  — Python зависимости
+
+## Legacy инструменти
 
 ### drill2gcode (Perl)
-Excellon DRL to G-code converter with helix pocket drilling for holes > 3.0mm.
-Uses CADSTAR 7.6 REP files for tool definitions.
+
+Конвертор от Excellon DRL към G-code с helix pocket пробиване за отвори > 3.0mm.
+Използва CADSTAR 7.6 REP файлове за дефиниция на инструментите.
 
     perl drill/drill2gcode.pl input.drl tools.rep
 
 ### grb2hpgl (Shell)
-Gerber to HPGL converter using pcb2gcode backend.
 
-    cd gerber && ./go.sh
+Стар конвертор Gerber->HPGL, базиран на pcb2gcode. Заменен от PCBooker GUI.
 
-## Submodules
+## Подмодули
 
-- `pcb2gcode` — reference C++ Gerber-to-Gcode converter
-- `bCNC` — CNC control software (Python/Tkinter)
+- `pcb2gcode` — C++ Gerber-to-Gcode конвертор (само за справка)
+- `bCNC` — CNC контролен софтуер
 
-## TODO
-
-- Raster hatching mode (simulated raster via horizontal/vertical interrupted HPGL lines)
-- PPM frequency correction for CW generator integration
-- Multi-pass isolation with configurable overlap
-
-## License
+## Лиценз
 
 GPL-2.0
 
-## Authors
+## Автори
 
 SCteam (smooker/LZ1CCM)
