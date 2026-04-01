@@ -204,6 +204,7 @@ class PCBookerWindow(QMainWindow):
             ("Load Gerbers (dir)...", self.load_gerbers),
             ("Load Files...",        self.load_files),
             ("Check Contours",       self.check_contours),
+            ("Gap Analysis",         self.gap_analysis),
             ("Generate Isolation",   self.generate_isolation),
             ("Export HPGL",          self.export_hpgl),
         ]
@@ -211,6 +212,36 @@ class PCBookerWindow(QMainWindow):
             btn = QPushButton(text)
             btn.clicked.connect(slot)
             left_layout.addWidget(btn)
+
+        # Min gap control (laser beam width — merges paths closer than this)
+        gap_frame = QHBoxLayout()
+        gap_frame.addWidget(QLabel("Min gap:"))
+        self.spin_min_gap = QDoubleSpinBox()
+        self.spin_min_gap.setRange(0.0, 2.0)
+        self.spin_min_gap.setSingleStep(0.05)
+        self.spin_min_gap.setValue(0.10)
+        self.spin_min_gap.setDecimals(2)
+        self.spin_min_gap.setSuffix(" mm")
+        self.spin_min_gap.setToolTip(
+            "Isolation paths closer than this get merged.\n"
+            "Set to laser beam width to prevent double burns.")
+        gap_frame.addWidget(self.spin_min_gap)
+        left_layout.addLayout(gap_frame)
+
+        # Overlap distance (path dedup — skip segments near already-drawn paths)
+        dedup_frame = QHBoxLayout()
+        dedup_frame.addWidget(QLabel("Dedup:"))
+        self.spin_dedup = QDoubleSpinBox()
+        self.spin_dedup.setRange(0.0, 1.0)
+        self.spin_dedup.setSingleStep(0.01)
+        self.spin_dedup.setValue(0.05)
+        self.spin_dedup.setDecimals(2)
+        self.spin_dedup.setSuffix(" mm")
+        self.spin_dedup.setToolTip(
+            "Skip path segments closer than this to already-drawn paths.\n"
+            "Pen lifts near old paths, drops when clear. Prevents double laser pass.")
+        dedup_frame.addWidget(self.spin_dedup)
+        left_layout.addLayout(dedup_frame)
 
         left.setFixedWidth(360)
         splitter.addWidget(left)
@@ -325,6 +356,43 @@ class PCBookerWindow(QMainWindow):
             self.statusBar().showMessage(f"Contour check: {total_problems} problems!")
         self.refresh_view()
 
+    def gap_analysis(self):
+        """Analyze gaps between copper features and report."""
+        if not self.merged:
+            QMessageBox.information(self, "Gap Analysis", "Load Gerber files first.")
+            return
+
+        msg = ""
+        for name, widget in self.layer_widgets.items():
+            merged = self.merged.get(name)
+            if merged is None:
+                continue
+            offset = widget.spin_offset.value() if widget.spin_offset else 0.1
+            gaps = isolation.gap_analysis(merged, offset)
+            if not gaps:
+                continue
+
+            tight = [g for g in gaps if g['status'] == 'tight']
+            overlap = [g for g in gaps if g['status'] == 'overlap']
+
+            if tight or overlap:
+                msg += f"{name} (offset={offset}mm):\n"
+                if overlap:
+                    msg += f"  {len(overlap)} gaps < offset — copper overlaps in isolation!\n"
+                    for g in overlap[:3]:
+                        msg += f"    gap: {g['gap_mm']:.3f}mm (need >{2*offset:.2f}mm)\n"
+                if tight:
+                    msg += f"  {len(tight)} tight gaps — paths will be merged\n"
+                    for g in tight[:3]:
+                        msg += f"    gap: {g['gap_mm']:.3f}mm (max offset: {g['min_offset']:.3f}mm)\n"
+                msg += "\n"
+
+        if not msg:
+            QMessageBox.information(self, "Gap Analysis", "All gaps OK for current offsets.")
+        else:
+            QMessageBox.warning(self, "Gap Analysis", msg)
+        self.statusBar().showMessage("Gap analysis complete.")
+
     def generate_isolation(self):
         # Clear old isolation paths and widgets
         self.iso_paths.clear()
@@ -335,6 +403,7 @@ class PCBookerWindow(QMainWindow):
 
         count = 0
         selected = 0
+        min_gap = self.spin_min_gap.value()
 
         for name, widget in self.layer_widgets.items():
             if widget.cb_iso is None or not widget.cb_iso.isChecked():
@@ -349,7 +418,8 @@ class PCBookerWindow(QMainWindow):
             mode = widget.combo_mode.currentText()
 
             try:
-                paths = isolation.isolation_paths(merged, offset, mode)
+                paths = isolation.isolation_paths(
+                    merged, offset, mode, min_gap_mm=min_gap)
             except Exception as e:
                 print(f"  ERROR: {name} isolation failed: {e}")
                 continue
@@ -359,7 +429,6 @@ class PCBookerWindow(QMainWindow):
                 self.iso_paths[iso_name] = paths
                 count += len(paths)
 
-                # Add as visible layer in the panel
                 iso_widget = LayerWidget(iso_name, ISOLATION_COLOR,
                                          on_change=self.refresh_view,
                                          iso_controls=False)
@@ -375,8 +444,9 @@ class PCBookerWindow(QMainWindow):
             self.statusBar().showMessage("No layers selected for isolation!")
             return
 
+        gap_info = f" (min_gap={min_gap}mm)" if min_gap > 0 else ""
         self.statusBar().showMessage(
-            f"Generated {count} isolation paths from {selected} layer(s).")
+            f"Generated {count} isolation paths from {selected} layer(s){gap_info}.")
         self.refresh_view()
 
     def export_hpgl(self):
@@ -391,15 +461,32 @@ class PCBookerWindow(QMainWindow):
         if not filepath:
             return
 
-        all_geoms = []
+        # Collect all paths
+        all_paths = []
         for name, paths in self.iso_paths.items():
-            for path in paths:
-                if hasattr(path, 'coords'):
-                    all_geoms.append(LineString(path.coords))
+            iso_w = self.iso_widgets.get(name)
+            if iso_w and not iso_w.cb_visible.isChecked():
+                continue
+            all_paths.extend(paths)
+
+        # Deduplicate — skip segments near already-drawn paths
+        dedup_dist = self.spin_dedup.value()
+        if dedup_dist > 0:
+            before = len(all_paths)
+            all_paths = isolation.deduplicate_paths(all_paths, dedup_dist)
+            after = len(all_paths)
+            print(f"  Dedup: {before} paths -> {after} segments "
+                  f"(min_dist={dedup_dist}mm)")
+
+        all_geoms = [p if isinstance(p, LineString) else LineString(p.coords)
+                     for p in all_paths]
 
         hpgl_export.export_hpgl(all_geoms, filepath)
-        self.statusBar().showMessage(f"Exported {len(all_geoms)} paths to {filepath}")
-        QMessageBox.information(self, "Export", f"HPGL saved to:\n{filepath}")
+        self.statusBar().showMessage(
+            f"Exported {len(all_geoms)} paths to {filepath}")
+        QMessageBox.information(self, "Export",
+                                f"HPGL saved to:\n{filepath}\n"
+                                f"{len(all_geoms)} path segments")
 
     # --- Drawing ---
 
