@@ -236,8 +236,9 @@ class PCBookerApp:
         filepaths = filedialog.askopenfilenames(
             title='Select Gerber files',
             filetypes=[
-                ('Gerber files', '*.gbr *.ger *.gtl *.gbl *.gts *.gbs *.gto *.gbo *.gm1 *.drl'),
                 ('All files', '*.*'),
+                ('Gerber files', '*.gbr *.ger *.gtl *.gbl *.gts *.gbs *.gto *.gbo *.gm1 *.GTL *.GBL *.GTS *.GBS *.GTO *.GBO'),
+                ('Drill files', '*.drl *.DRL *.xln'),
             ]
         )
         if not filepaths:

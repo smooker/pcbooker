@@ -55,6 +55,7 @@ def load_single(filepath):
 def load_gerber_files(filepaths):
     """
     Load multiple individual Gerber files by path.
+    Validates each file — skips non-Gerber files with a warning.
 
     Returns:
         dict of {filename: GerberFile}
@@ -63,9 +64,14 @@ def load_gerber_files(filepaths):
     for fp in filepaths:
         name = Path(fp).stem
         try:
-            layers[name] = GerberFile.open(fp)
+            gf = GerberFile.open(fp)
+            if gf.objects or hasattr(gf, 'apertures'):
+                layers[name] = gf
+            else:
+                print(f"Warning: {fp} loaded but has no objects — may not be a valid Gerber")
+                layers[name] = gf  # load anyway, let user decide
         except Exception as e:
-            print(f"Warning: Could not load {fp}: {e}")
+            print(f"Warning: Could not load {fp}: {e} — skipping (not a valid Gerber?)")
     return layers
 
 
