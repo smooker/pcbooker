@@ -75,21 +75,22 @@ def load_gerber_files(filepaths):
     return layers
 
 
-def _aperture_radius(aperture):
-    """Get effective radius of an aperture in mm."""
+def _aperture_radius(aperture, to_mm):
+    """Get effective radius in mm, converting from native units."""
     if isinstance(aperture, CircleAperture):
-        return float(aperture.diameter) / 2.0
+        return to_mm(float(aperture.diameter)) / 2.0
     elif isinstance(aperture, RectangleAperture):
-        return max(float(aperture.w), float(aperture.h)) / 2.0
+        return max(to_mm(float(aperture.w)), to_mm(float(aperture.h))) / 2.0
     elif isinstance(aperture, ObroundAperture):
-        return max(float(aperture.w), float(aperture.h)) / 2.0
+        return max(to_mm(float(aperture.w)), to_mm(float(aperture.h))) / 2.0
     else:
         return 0.1  # fallback 0.1mm
 
 
-def _obj_to_mm(obj, unit):
-    """Convert object coordinates to mm."""
-    if unit == 'inch':
+def _make_to_mm(unit):
+    """Create unit conversion function from gerbonara unit to mm."""
+    unit_str = str(unit).lower()
+    if unit_str in ('in', 'inch'):
         return lambda v: float(v) * 25.4
     return lambda v: float(v)
 
@@ -98,12 +99,12 @@ def flash_to_shapely(flash, to_mm):
     """Convert a Flash object to Shapely geometry."""
     x = to_mm(flash.x)
     y = to_mm(flash.y)
-    r = _aperture_radius(flash.aperture)
+    r = _aperture_radius(flash.aperture, to_mm)
     if isinstance(flash.aperture, CircleAperture):
         return Point(x, y).buffer(r, resolution=16)
     elif isinstance(flash.aperture, (RectangleAperture, ObroundAperture)):
-        w = to_mm(flash.aperture.w) if hasattr(flash.aperture, 'w') else r * 2
-        h = to_mm(flash.aperture.h) if hasattr(flash.aperture, 'h') else r * 2
+        w = to_mm(float(flash.aperture.w)) if hasattr(flash.aperture, 'w') else r * 2
+        h = to_mm(float(flash.aperture.h)) if hasattr(flash.aperture, 'h') else r * 2
         return box(x - w/2, y - h/2, x + w/2, y + h/2)
     else:
         return Point(x, y).buffer(r, resolution=16)
@@ -113,7 +114,7 @@ def line_to_shapely(line, to_mm):
     """Convert a Line object to Shapely geometry."""
     x1, y1 = to_mm(line.x1), to_mm(line.y1)
     x2, y2 = to_mm(line.x2), to_mm(line.y2)
-    r = _aperture_radius(line.aperture)
+    r = _aperture_radius(line.aperture, to_mm)
     ls = LineString([(x1, y1), (x2, y2)])
     if r > 0:
         return ls.buffer(r, cap_style='round', join_style='round')
@@ -127,7 +128,6 @@ def arc_to_shapely(arc, to_mm, segments=32):
     x1, y1 = to_mm(arc.x1), to_mm(arc.y1)
     x2, y2 = to_mm(arc.x2), to_mm(arc.y2)
 
-    # Calculate arc points
     r = math.sqrt((x1 - cx)**2 + (y1 - cy)**2)
     if r < 1e-6:
         return LineString([(x1, y1), (x2, y2)])
@@ -154,7 +154,7 @@ def arc_to_shapely(arc, to_mm, segments=32):
         points.append((px, py))
 
     ls = LineString(points)
-    ap_r = _aperture_radius(arc.aperture) if hasattr(arc, 'aperture') and arc.aperture else 0
+    ap_r = _aperture_radius(arc.aperture, to_mm) if hasattr(arc, 'aperture') and arc.aperture else 0
     if ap_r > 0:
         return ls.buffer(ap_r, cap_style='round')
     return ls
@@ -196,10 +196,7 @@ def layer_to_polygons(layer):
         list of Shapely geometry objects
     """
     unit = getattr(layer, 'unit', None)
-    if unit and str(unit).lower().startswith('inch'):
-        to_mm = lambda v: float(v) * 25.4
-    else:
-        to_mm = lambda v: float(v)
+    to_mm = _make_to_mm(unit)
 
     geometries = []
 
