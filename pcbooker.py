@@ -685,8 +685,30 @@ class PCBookerWindow(QMainWindow):
         self.canvas.draw()
 
 
+def _load_fonts():
+    """Load bundled Terminus font from fonts/ directory."""
+    from PyQt5.QtGui import QFontDatabase, QFont
+    font_dir = Path(__file__).parent / 'fonts'
+    loaded = []
+    if font_dir.is_dir():
+        for ttf in sorted(font_dir.glob('*.ttf')):
+            fid = QFontDatabase.addApplicationFont(str(ttf))
+            if fid >= 0:
+                families = QFontDatabase.applicationFontFamilies(fid)
+                loaded.extend(families)
+    return loaded
+
+
 def main():
     app = QApplication(sys.argv)
+
+    # Load bundled font and apply as default
+    families = _load_fonts()
+    if families:
+        from PyQt5.QtGui import QFont
+        font = QFont(families[0], 11)
+        app.setFont(font)
+
     win = PCBookerWindow()
     win.show()
 
