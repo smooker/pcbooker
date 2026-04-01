@@ -100,7 +100,7 @@ def plot_linestrings(ax, paths, color='green', linewidth=1.0, alpha=0.8):
 class LayerWidget(QFrame):
     """Single layer row with visibility, iso, mode, offset controls."""
 
-    def __init__(self, name, color, on_change=None, parent=None):
+    def __init__(self, name, color, on_change=None, iso_controls=True, parent=None):
         super().__init__(parent)
         self.layer_name = name
         self._on_change = on_change
@@ -129,29 +129,30 @@ class LayerWidget(QFrame):
         name_lbl.setMinimumWidth(100)
         layout.addWidget(name_lbl, stretch=1)
 
-        # Iso checkbox
-        self.cb_iso = QCheckBox("Iso")
-        self.cb_iso.setToolTip("Include in isolation routing")
-        self.cb_iso.stateChanged.connect(self._changed)
-        layout.addWidget(self.cb_iso)
+        # Iso controls (not shown for generated isolation layers)
+        self.cb_iso = None
+        self.combo_mode = None
+        self.spin_offset = None
 
-        # Mode combo
-        self.combo_mode = QComboBox()
-        self.combo_mode.addItems(["outline", "inline"])
-        self.combo_mode.setFixedWidth(80)
-        self.combo_mode.setToolTip("Outline = expand outward, Inline = shrink inward")
-        layout.addWidget(self.combo_mode)
+        if iso_controls:
+            self.cb_iso = QCheckBox("Iso")
+            self.cb_iso.setToolTip("Include in isolation routing")
+            self.cb_iso.stateChanged.connect(self._changed)
+            layout.addWidget(self.cb_iso)
 
-        # Offset spinbox
-        layout.addWidget(QLabel("mm:"))
-        self.spin_offset = QDoubleSpinBox()
-        self.spin_offset.setRange(0.01, 5.0)
-        self.spin_offset.setSingleStep(0.05)
-        self.spin_offset.setValue(0.10)
-        self.spin_offset.setDecimals(2)
-        self.spin_offset.setFixedWidth(70)
-        self.spin_offset.setToolTip("Isolation offset in mm")
-        layout.addWidget(self.spin_offset)
+            self.combo_mode = QComboBox()
+            self.combo_mode.addItems(["outline", "inline"])
+            self.combo_mode.setFixedWidth(80)
+            layout.addWidget(self.combo_mode)
+
+            layout.addWidget(QLabel("mm:"))
+            self.spin_offset = QDoubleSpinBox()
+            self.spin_offset.setRange(0.01, 5.0)
+            self.spin_offset.setSingleStep(0.05)
+            self.spin_offset.setValue(0.10)
+            self.spin_offset.setDecimals(2)
+            self.spin_offset.setFixedWidth(70)
+            layout.addWidget(self.spin_offset)
 
     def _changed(self):
         if self._on_change:
@@ -172,6 +173,7 @@ class PCBookerWindow(QMainWindow):
         self.iso_paths = {}
         self.problems = {}
         self.layer_widgets = {}
+        self.iso_widgets = {}   # isolation layer widgets (separate)
 
         self._build_ui()
 
@@ -324,12 +326,18 @@ class PCBookerWindow(QMainWindow):
         self.refresh_view()
 
     def generate_isolation(self):
+        # Clear old isolation paths and widgets
         self.iso_paths.clear()
+        for w in list(self.iso_widgets.values()):
+            self._layer_layout.removeWidget(w)
+            w.deleteLater()
+        self.iso_widgets.clear()
+
         count = 0
         selected = 0
 
         for name, widget in self.layer_widgets.items():
-            if not widget.cb_iso.isChecked():
+            if widget.cb_iso is None or not widget.cb_iso.isChecked():
                 continue
             selected += 1
 
@@ -347,8 +355,17 @@ class PCBookerWindow(QMainWindow):
                 continue
 
             if paths:
-                self.iso_paths[name] = paths
+                iso_name = f"iso: {name} ({offset}mm {mode})"
+                self.iso_paths[iso_name] = paths
                 count += len(paths)
+
+                # Add as visible layer in the panel
+                iso_widget = LayerWidget(iso_name, ISOLATION_COLOR,
+                                         on_change=self.refresh_view,
+                                         iso_controls=False)
+                self._layer_layout.insertWidget(
+                    self._layer_layout.count() - 1, iso_widget)
+                self.iso_widgets[iso_name] = iso_widget
 
         if selected == 0:
             QMessageBox.information(self, "Isolation",
@@ -398,6 +415,9 @@ class PCBookerWindow(QMainWindow):
                 plot_geometry(self.ax, geom, color=color, alpha=0.6)
 
         for name, paths in self.iso_paths.items():
+            iso_w = self.iso_widgets.get(name)
+            if iso_w and not iso_w.cb_visible.isChecked():
+                continue
             plot_linestrings(self.ax, paths, color=ISOLATION_COLOR,
                              linewidth=1.5, alpha=0.9)
 
