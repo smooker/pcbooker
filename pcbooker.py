@@ -301,7 +301,7 @@ class PCBookerWindow(QMainWindow):
         dedup_frame.addWidget(self.spin_dedup)
         left_layout.addLayout(dedup_frame)
 
-        left.setFixedWidth(360)
+        left.setMinimumWidth(280)
         splitter.addWidget(left)
 
         # --- Right panel: matplotlib ---
@@ -315,9 +315,9 @@ class PCBookerWindow(QMainWindow):
         self._setup_axes()
 
         self.canvas = FigureCanvasQTAgg(self.fig)
-        self.canvas.setSizePolicy(
-            self.canvas.sizePolicy().horizontalPolicy(),
-            self.canvas.sizePolicy().verticalPolicy())
+        from PyQt5.QtWidgets import QSizePolicy
+        self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.canvas.updateGeometry()
         toolbar = NavigationToolbar2QT(self.canvas, right)
         right_layout.addWidget(toolbar)
         right_layout.addWidget(self.canvas, stretch=1)
@@ -325,6 +325,7 @@ class PCBookerWindow(QMainWindow):
         splitter.addWidget(right)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
+        splitter.setSizes([300, 900])
 
         # Status bar
         self.statusBar().showMessage("Ready. Load Gerber files to begin.")
