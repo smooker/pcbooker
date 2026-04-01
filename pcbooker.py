@@ -287,11 +287,15 @@ class PCBookerWindow(QMainWindow):
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
 
-        self.fig = Figure(figsize=(8, 6), facecolor='black')
+        self.fig = Figure(facecolor='black')
+        self.fig.set_tight_layout(True)
         self.ax = self.fig.add_subplot(111)
         self._setup_axes()
 
         self.canvas = FigureCanvasQTAgg(self.fig)
+        self.canvas.setSizePolicy(
+            self.canvas.sizePolicy().horizontalPolicy(),
+            self.canvas.sizePolicy().verticalPolicy())
         toolbar = NavigationToolbar2QT(self.canvas, right)
         right_layout.addWidget(toolbar)
         right_layout.addWidget(self.canvas, stretch=1)
@@ -606,6 +610,7 @@ class PCBookerWindow(QMainWindow):
                                      color=PROBLEM_COLOR, fontsize=8)
 
         self.ax.autoscale_view()
+        self.fig.tight_layout(pad=0.5)
         self.canvas.draw()
 
 
