@@ -100,7 +100,8 @@ def plot_linestrings(ax, paths, color='green', linewidth=1.0, alpha=0.8):
 class LayerWidget(QFrame):
     """Single layer row with visibility, iso, mode, offset controls."""
 
-    def __init__(self, name, color, on_change=None, iso_controls=True, parent=None):
+    def __init__(self, name, color, on_change=None, iso_controls=True,
+                 info_text=None, parent=None):
         super().__init__(parent)
         self.layer_name = name
         self._on_change = on_change
@@ -133,6 +134,7 @@ class LayerWidget(QFrame):
         self.cb_iso = None
         self.combo_mode = None
         self.spin_offset = None
+        self.spin_pass2 = None
 
         if iso_controls:
             self.cb_iso = QCheckBox("Iso")
@@ -151,8 +153,27 @@ class LayerWidget(QFrame):
             self.spin_offset.setSingleStep(0.05)
             self.spin_offset.setValue(0.10)
             self.spin_offset.setDecimals(2)
-            self.spin_offset.setFixedWidth(70)
+            self.spin_offset.setFixedWidth(60)
+            self.spin_offset.setToolTip("First pass offset from copper")
             layout.addWidget(self.spin_offset)
+
+            layout.addWidget(QLabel("+"))
+            self.spin_pass2 = QDoubleSpinBox()
+            self.spin_pass2.setRange(0.0, 5.0)
+            self.spin_pass2.setSingleStep(0.05)
+            self.spin_pass2.setValue(0.0)
+            self.spin_pass2.setDecimals(2)
+            self.spin_pass2.setFixedWidth(60)
+            self.spin_pass2.setToolTip(
+                "Second pass offset (from first outline).\n"
+                "0 = single pass only.")
+            layout.addWidget(self.spin_pass2)
+
+        elif info_text:
+            # Read-only info for generated isolation layers
+            info = QLabel(info_text)
+            info.setStyleSheet("color: #888; font-size: 10px;")
+            layout.addWidget(info)
 
     def _changed(self):
         if self._on_change:
@@ -393,6 +414,20 @@ class PCBookerWindow(QMainWindow):
             QMessageBox.warning(self, "Gap Analysis", msg)
         self.statusBar().showMessage("Gap analysis complete.")
 
+    def _add_iso_layer(self, iso_name, paths, info_text, color=None):
+        """Add an isolation result as a toggleable layer."""
+        if not paths:
+            return 0
+        self.iso_paths[iso_name] = paths
+        iso_widget = LayerWidget(iso_name, color or ISOLATION_COLOR,
+                                  on_change=self.refresh_view,
+                                  iso_controls=False,
+                                  info_text=info_text)
+        self._layer_layout.insertWidget(
+            self._layer_layout.count() - 1, iso_widget)
+        self.iso_widgets[iso_name] = iso_widget
+        return len(paths)
+
     def generate_isolation(self):
         # Clear old isolation paths and widgets
         self.iso_paths.clear()
@@ -416,25 +451,34 @@ class PCBookerWindow(QMainWindow):
 
             offset = widget.spin_offset.value()
             mode = widget.combo_mode.currentText()
+            pass2 = widget.spin_pass2.value()
 
+            # Pass 1
             try:
-                paths = isolation.isolation_paths(
+                paths1 = isolation.isolation_paths(
                     merged, offset, mode, min_gap_mm=min_gap)
             except Exception as e:
-                print(f"  ERROR: {name} isolation failed: {e}")
+                print(f"  ERROR: {name} pass 1 failed: {e}")
                 continue
 
-            if paths:
-                iso_name = f"iso: {name} ({offset}mm {mode})"
-                self.iso_paths[iso_name] = paths
-                count += len(paths)
+            iso_name1 = f"iso: {name} pass1"
+            info1 = f"{mode} {offset}mm, gap={min_gap}mm"
+            count += self._add_iso_layer(iso_name1, paths1, info1)
 
-                iso_widget = LayerWidget(iso_name, ISOLATION_COLOR,
-                                         on_change=self.refresh_view,
-                                         iso_controls=False)
-                self._layer_layout.insertWidget(
-                    self._layer_layout.count() - 1, iso_widget)
-                self.iso_widgets[iso_name] = iso_widget
+            # Pass 2 (outline of the outline)
+            if pass2 > 0 and paths1:
+                total_offset = offset + pass2
+                try:
+                    paths2 = isolation.isolation_paths(
+                        merged, total_offset, mode, min_gap_mm=min_gap)
+                except Exception as e:
+                    print(f"  ERROR: {name} pass 2 failed: {e}")
+                    continue
+
+                iso_name2 = f"iso: {name} pass2"
+                info2 = f"{mode} {offset}+{pass2}={total_offset}mm"
+                count += self._add_iso_layer(
+                    iso_name2, paths2, info2, color='#00cc88')
 
         if selected == 0:
             QMessageBox.information(self, "Isolation",
