@@ -134,7 +134,7 @@ class LayerWidget(QFrame):
         self.cb_iso = None
         self.combo_mode = None
         self.spin_offset = None
-        self.spin_pass2 = None
+        self.spin_passes = None
 
         if iso_controls:
             self.cb_iso = QCheckBox("Iso")
@@ -157,17 +157,17 @@ class LayerWidget(QFrame):
             self.spin_offset.setToolTip("First pass offset from copper")
             layout.addWidget(self.spin_offset)
 
-            layout.addWidget(QLabel("+"))
-            self.spin_pass2 = QDoubleSpinBox()
-            self.spin_pass2.setRange(0.0, 5.0)
-            self.spin_pass2.setSingleStep(0.05)
-            self.spin_pass2.setValue(0.0)
-            self.spin_pass2.setDecimals(2)
-            self.spin_pass2.setFixedWidth(60)
-            self.spin_pass2.setToolTip(
-                "Second pass offset (from first outline).\n"
-                "0 = single pass only.")
-            layout.addWidget(self.spin_pass2)
+            layout.addWidget(QLabel("x"))
+            from PyQt5.QtWidgets import QSpinBox
+            self.spin_passes = QSpinBox()
+            self.spin_passes.setRange(1, 20)
+            self.spin_passes.setValue(1)
+            self.spin_passes.setFixedWidth(45)
+            self.spin_passes.setToolTip(
+                "Number of passes. Each additional pass\n"
+                "is 0.05mm (50um) further from the previous.\n"
+                "1 = single pass only.")
+            layout.addWidget(self.spin_passes)
 
         elif info_text:
             # Read-only info for generated isolation layers
@@ -248,6 +248,21 @@ class PCBookerWindow(QMainWindow):
             "Set to laser beam width to prevent double burns.")
         gap_frame.addWidget(self.spin_min_gap)
         left_layout.addLayout(gap_frame)
+
+        # Pass step (distance between multi-pass outlines)
+        step_frame = QHBoxLayout()
+        step_frame.addWidget(QLabel("Pass step:"))
+        self.spin_pass_step = QDoubleSpinBox()
+        self.spin_pass_step.setRange(0.01, 1.0)
+        self.spin_pass_step.setSingleStep(0.01)
+        self.spin_pass_step.setValue(0.05)
+        self.spin_pass_step.setDecimals(2)
+        self.spin_pass_step.setSuffix(" mm")
+        self.spin_pass_step.setToolTip(
+            "Distance between each additional pass.\n"
+            "Default 0.05mm (50um).")
+        step_frame.addWidget(self.spin_pass_step)
+        left_layout.addLayout(step_frame)
 
         # Overlap distance (path dedup — skip segments near already-drawn paths)
         dedup_frame = QHBoxLayout()
@@ -439,6 +454,11 @@ class PCBookerWindow(QMainWindow):
         count = 0
         selected = 0
         min_gap = self.spin_min_gap.value()
+        pass_step = self.spin_pass_step.value()
+
+        # Colors for multi-pass (cycle through)
+        pass_colors = [ISOLATION_COLOR, '#00cc88', '#00aaff', '#ffaa00',
+                       '#ff00ff', '#88ff00', '#00ffff', '#ff8800']
 
         for name, widget in self.layer_widgets.items():
             if widget.cb_iso is None or not widget.cb_iso.isChecked():
@@ -451,34 +471,44 @@ class PCBookerWindow(QMainWindow):
 
             offset = widget.spin_offset.value()
             mode = widget.combo_mode.currentText()
-            pass2 = widget.spin_pass2.value()
+            num_passes = widget.spin_passes.value()
 
-            # Pass 1
-            try:
-                paths1 = isolation.isolation_paths(
-                    merged, offset, mode, min_gap_mm=min_gap)
-            except Exception as e:
-                print(f"  ERROR: {name} pass 1 failed: {e}")
-                continue
+            print(f"\n=== Isolation: {name} ===")
+            print(f"  Mode: {mode}, offset: {offset}mm, "
+                  f"passes: {num_passes}, step: {pass_step}mm, "
+                  f"min_gap: {min_gap}mm")
 
-            iso_name1 = f"iso: {name} pass1"
-            info1 = f"{mode} {offset}mm, gap={min_gap}mm"
-            count += self._add_iso_layer(iso_name1, paths1, info1)
+            for p in range(num_passes):
+                cur_offset = offset + p * pass_step
+                pass_num = p + 1
 
-            # Pass 2 (outline of the outline)
-            if pass2 > 0 and paths1:
-                total_offset = offset + pass2
+                print(f"  --- Pass {pass_num}/{num_passes}: "
+                      f"offset={cur_offset:.3f}mm ---")
+
                 try:
-                    paths2 = isolation.isolation_paths(
-                        merged, total_offset, mode, min_gap_mm=min_gap)
+                    paths = isolation.isolation_paths(
+                        merged, cur_offset, mode, min_gap_mm=min_gap)
                 except Exception as e:
-                    print(f"  ERROR: {name} pass 2 failed: {e}")
+                    print(f"    ERROR: {e}")
                     continue
 
-                iso_name2 = f"iso: {name} pass2"
-                info2 = f"{mode} {offset}+{pass2}={total_offset}mm"
-                count += self._add_iso_layer(
-                    iso_name2, paths2, info2, color='#00cc88')
+                total_len = sum(
+                    len(list(pt.coords)) for pt in paths) if paths else 0
+                print(f"    Result: {len(paths)} paths, "
+                      f"{total_len} points")
+
+                if not paths:
+                    print(f"    No paths at this offset — "
+                          f"gap too narrow, stopping.")
+                    break
+
+                iso_name = f"iso: {name} pass{pass_num}"
+                info = (f"pass {pass_num}: {mode} {cur_offset:.2f}mm "
+                        f"(base={offset}+{p}x{pass_step})")
+                color = pass_colors[p % len(pass_colors)]
+                n = self._add_iso_layer(iso_name, paths, info, color=color)
+                count += n
+                print(f"    Added {n} paths as layer '{iso_name}'")
 
         if selected == 0:
             QMessageBox.information(self, "Isolation",
@@ -505,27 +535,39 @@ class PCBookerWindow(QMainWindow):
         if not filepath:
             return
 
-        # Collect all paths
+        # Collect all visible paths
         all_paths = []
+        print(f"\n=== HPGL Export ===")
         for name, paths in self.iso_paths.items():
             iso_w = self.iso_widgets.get(name)
             if iso_w and not iso_w.cb_visible.isChecked():
+                print(f"  SKIP (hidden): {name}")
                 continue
             all_paths.extend(paths)
+            print(f"  Include: {name} — {len(paths)} paths")
+
+        total_before = sum(
+            (LineString(p.coords) if not isinstance(p, LineString) else p).length
+            for p in all_paths)
+        print(f"  Total: {len(all_paths)} paths, {total_before:.1f}mm")
 
         # Deduplicate — skip segments near already-drawn paths
         dedup_dist = self.spin_dedup.value()
         if dedup_dist > 0:
-            before = len(all_paths)
+            before_n = len(all_paths)
             all_paths = isolation.deduplicate_paths(all_paths, dedup_dist)
-            after = len(all_paths)
-            print(f"  Dedup: {before} paths -> {after} segments "
-                  f"(min_dist={dedup_dist}mm)")
+            total_after = sum(p.length for p in all_paths)
+            saved = total_before - total_after
+            print(f"  Dedup (min_dist={dedup_dist}mm): "
+                  f"{before_n} -> {len(all_paths)} segments")
+            print(f"  Length: {total_before:.1f}mm -> {total_after:.1f}mm "
+                  f"(saved {saved:.1f}mm = {saved/max(total_before,1)*100:.1f}%)")
 
         all_geoms = [p if isinstance(p, LineString) else LineString(p.coords)
                      for p in all_paths]
 
         hpgl_export.export_hpgl(all_geoms, filepath)
+        print(f"  Written: {filepath}")
         self.statusBar().showMessage(
             f"Exported {len(all_geoms)} paths to {filepath}")
         QMessageBox.information(self, "Export",
