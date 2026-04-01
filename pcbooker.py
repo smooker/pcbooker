@@ -318,8 +318,26 @@ class PCBookerWindow(QMainWindow):
         from PyQt5.QtWidgets import QSizePolicy
         self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.canvas.updateGeometry()
+        self.canvas.mpl_connect('scroll_event', self._on_scroll)
+        toolbar_row = QHBoxLayout()
         toolbar = NavigationToolbar2QT(self.canvas, right)
-        right_layout.addWidget(toolbar)
+        toolbar_row.addWidget(toolbar, stretch=1)
+        btn_zin = QPushButton("+")
+        btn_zin.setFixedWidth(30)
+        btn_zin.setToolTip("Zoom In")
+        btn_zin.clicked.connect(lambda: self._zoom(0.7))
+        toolbar_row.addWidget(btn_zin)
+        btn_zout = QPushButton("-")
+        btn_zout.setFixedWidth(30)
+        btn_zout.setToolTip("Zoom Out")
+        btn_zout.clicked.connect(lambda: self._zoom(1.4))
+        toolbar_row.addWidget(btn_zout)
+        btn_fit = QPushButton("Fit")
+        btn_fit.setFixedWidth(40)
+        btn_fit.setToolTip("Fit to view")
+        btn_fit.clicked.connect(self._zoom_fit)
+        toolbar_row.addWidget(btn_fit)
+        right_layout.addLayout(toolbar_row)
         right_layout.addWidget(self.canvas, stretch=1)
 
         splitter.addWidget(right)
@@ -336,6 +354,39 @@ class PCBookerWindow(QMainWindow):
         self.ax.grid(True, color='#333333', linewidth=0.5)
         self.ax.set_xlabel('mm')
         self.ax.set_ylabel('mm')
+
+    def _on_scroll(self, event):
+        """Zoom in/out on mouse scroll wheel, centered on cursor."""
+        if event.inaxes != self.ax:
+            return
+        scale = 0.8 if event.button == 'up' else 1.25
+        xlim = self.ax.get_xlim()
+        ylim = self.ax.get_ylim()
+        xc, yc = event.xdata, event.ydata
+        new_w = (xlim[1] - xlim[0]) * scale
+        new_h = (ylim[1] - ylim[0]) * scale
+        rx = (xc - xlim[0]) / (xlim[1] - xlim[0])
+        ry = (yc - ylim[0]) / (ylim[1] - ylim[0])
+        self.ax.set_xlim(xc - rx * new_w, xc + (1 - rx) * new_w)
+        self.ax.set_ylim(yc - ry * new_h, yc + (1 - ry) * new_h)
+        self.canvas.draw_idle()
+
+    def _zoom(self, scale):
+        """Zoom in/out centered on current view."""
+        xlim = self.ax.get_xlim()
+        ylim = self.ax.get_ylim()
+        xc = (xlim[0] + xlim[1]) / 2
+        yc = (ylim[0] + ylim[1]) / 2
+        new_w = (xlim[1] - xlim[0]) * scale
+        new_h = (ylim[1] - ylim[0]) * scale
+        self.ax.set_xlim(xc - new_w / 2, xc + new_w / 2)
+        self.ax.set_ylim(yc - new_h / 2, yc + new_h / 2)
+        self.canvas.draw_idle()
+
+    def _zoom_fit(self):
+        """Reset zoom to fit all content."""
+        self.ax.autoscale_view()
+        self.canvas.draw_idle()
 
     # --- File loading ---
 
