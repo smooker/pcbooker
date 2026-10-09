@@ -1,14 +1,16 @@
 """
 hpgl_export.py — HPGL file generator for laser engraving
 
-HPGL coordinate system: 0.025mm per unit (40 units/mm)
+HPGL coordinate system: 0.0254 mm per unit (1/1016 in, 1 mm = 5000/127 units).
+Not 40 units/mm: the TRUMPF VectorMark reads standard HPGL, 40 draws 1.6 % too large
+(measured 2026-04-08, see trumpf/hpgl/README.md).
 Commands: IN (init), SP (select pen), PU (pen up), PD (pen down), PA (plot abs)
 """
 
 from shapely.geometry import MultiPolygon, Polygon, MultiLineString, LineString
 
 
-UNITS_PER_MM = 40.0  # 0.025mm per HPGL unit
+UNITS_PER_MM = 5000.0 / 127.0  # 0.0254 mm per HPGL unit (not 40)
 
 
 def coords_to_hpgl(coords):
