@@ -1,14 +1,16 @@
 // HPGL parser for hpglview: reads the file pcbooker writes, independent of the exporter.
 #pragma once
 
+#include "units.h"
+
 #include <map>
 #include <string>
 #include <vector>
 
 namespace hpgl {
 
-// pcbooker / TRUMPF VectorMark: 0.0254 mm per unit (hpgl_export.py), not 40 u/mm
-constexpr double UNITS_PER_MM = 5000.0 / 127.0;
+// the one constant lives in units.h: 0.0254 mm per unit, not 40 u/mm
+constexpr double UNITS_PER_MM = pcbook::HPGL_UNITS_PER_MM;
 
 struct Seg {
     int pen;

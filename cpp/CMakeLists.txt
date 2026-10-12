@@ -21,7 +21,7 @@ target_include_directories(clipper2 PUBLIC ${CLIPPER2_DIR}/include)
 # --- our code: warnings on, after the third-party targets ---
 add_compile_options(-Wall -Wextra)
 
-add_library(pcbook STATIC libpcbook/pcbook.cpp)
+add_library(pcbook STATIC libpcbook/pcbook.cpp libpcbook/hpgl.cpp)
 target_include_directories(pcbook PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/libpcbook
     ${CMAKE_CURRENT_SOURCE_DIR}/ext/json
@@ -32,3 +32,24 @@ enable_testing()
 add_executable(test_ext tests/test_ext.cpp)
 target_link_libraries(test_ext pcbook)
 add_test(NAME ext COMMAND test_ext)
+
+add_executable(test_hpgl tests/test_hpgl.cpp)
+target_link_libraries(test_hpgl pcbook)
+target_compile_definitions(test_hpgl PRIVATE DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
+add_test(NAME hpgl COMMAND test_hpgl)
+
+# --- Qt6 front ends: optional, the chroot has no Qt ---
+find_package(Qt6 COMPONENTS Core Gui Widgets QUIET)
+if(Qt6_FOUND)
+    set(CMAKE_AUTOMOC ON)
+    add_executable(hpglview hpglview/main.cpp hpglview/view.cpp)
+    target_link_libraries(hpglview pcbook Qt6::Core Qt6::Gui Qt6::Widgets)
+    # Terminus from pcbooker's fonts/, for the status line and the PNG summary
+    qt_add_resources(hpglview fonts
+        PREFIX /fonts
+        BASE ${CMAKE_CURRENT_SOURCE_DIR}/../fonts
+        FILES ${CMAKE_CURRENT_SOURCE_DIR}/../fonts/Terminus.ttf
+              ${CMAKE_CURRENT_SOURCE_DIR}/../fonts/TerminusBold.ttf)
+else()
+    message(STATUS "Qt6 not found: library, CLI, MCP and tests only")
+endif()
