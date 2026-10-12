@@ -4,3 +4,6 @@
 [submodule "bCNC"]
 	path = bCNC
 	url = ssh://git@github.com/vlachoudis/bCNC.git
+[submodule "cpp/ext/Clipper2"]
+	path = cpp/ext/Clipper2
+	url = https://github.com/AngusJohnson/Clipper2
