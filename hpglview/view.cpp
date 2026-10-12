@@ -2,7 +2,6 @@
 
 #include <QFile>
 #include <QFileInfo>
-#include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QTimer>
@@ -126,6 +125,30 @@ QString summary(const hpgl::Plot &p)
     return r;
 }
 
+QImage renderImage(const hpgl::Plot &p, const Paths &paths, int px, const QString &title,
+                   const DrawOpts &o)
+{
+    // aspect of the plot, longest side = px, plus a strip for the summary line
+    QSizeF b = paths.bounds.size();
+    double ar = (b.width() > 0 && b.height() > 0) ? b.width() / b.height() : 1.0;
+    QSize area = ar >= 1 ? QSize(px, std::max(100, int(px / ar)))
+                         : QSize(std::max(100, int(px * ar)), px);
+    const int strip = 24;
+    QImage img(area.width(), area.height() + strip, QImage::Format_RGB32);
+    img.fill(Qt::white);
+    QPainter g(&img);
+    double scale;
+    QPointF origin;
+    fit(paths, area, scale, origin);
+    g.translate(0, strip);
+    draw(g, p, paths, scale, origin, area, o);
+    g.resetTransform();
+    g.fillRect(0, 0, img.width(), strip, QColor(245, 245, 245));
+    g.setPen(Qt::black);
+    g.drawText(QRect(6, 0, img.width() - 12, strip), Qt::AlignVCenter, title + "  |  " + summary(p));
+    return img;
+}
+
 Viewer::Viewer(double units_per_mm, QWidget *parent) : QWidget(parent), upmm_(units_per_mm)
 {
     setMouseTracking(true);
@@ -133,8 +156,13 @@ Viewer::Viewer(double units_per_mm, QWidget *parent) : QWidget(parent), upmm_(un
     setMinimumSize(400, 300);
     // an exporter rewrites the file: reload a moment later, re-add the watch (it is lost on replace)
     connect(&watch_, &QFileSystemWatcher::fileChanged, this, [this] {
-        QTimer::singleShot(300, this, [this] { load(path_); });
+        QTimer::singleShot(300, this, [this] { reload(); });
     });
+}
+
+QString Viewer::title() const
+{
+    return QFileInfo(path_).fileName();
 }
 
 bool Viewer::load(const QString &path)
@@ -144,23 +172,42 @@ bool Viewer::load(const QString &path)
         emit status("cannot open " + path);
         return false;
     }
+    if (path != path_) { // another file: watch it instead, fit it once
+        if (!watch_.files().isEmpty())
+            watch_.removePaths(watch_.files());
+        fitted_ = false;
+    }
     path_ = path;
     plot_ = hpgl::parse(f.readAll().toStdString(), upmm_);
     paths_.build(plot_);
     if (!watch_.files().contains(path))
         watch_.addPath(path);
     if (!fitted_) {
-        doFit();
+        fitView();
         fitted_ = true;
     }
-    emit status(QFileInfo(path).fileName() + "  |  " + summary(plot_));
+    emit status(title() + "  |  " + summary(plot_));
     update();
     return true;
 }
 
-void Viewer::doFit()
+void Viewer::setUnitsPerMm(double u)
+{
+    upmm_ = u;
+    reload();
+}
+
+void Viewer::fitView()
 {
     fit(paths_, size(), scale_, origin_);
+    update();
+}
+
+void Viewer::zoomBy(double k)
+{
+    QPointF c(width() / 2.0, height() / 2.0);
+    origin_ = c + (origin_ - c) * k;
+    scale_ *= k;
     update();
 }
 
@@ -173,7 +220,7 @@ void Viewer::paintEvent(QPaintEvent *)
 void Viewer::resizeEvent(QResizeEvent *)
 {
     if (fitted_)
-        doFit();
+        fitView();
 }
 
 void Viewer::wheelEvent(QWheelEvent *e)
@@ -200,15 +247,4 @@ void Viewer::mouseMoveEvent(QMouseEvent *e)
     double x = (e->position().x() - origin_.x()) / scale_ / upmm_;
     double y = (origin_.y() - e->position().y()) / scale_ / upmm_;
     emit cursor(QString("%1, %2 mm").arg(x, 0, 'f', 3).arg(y, 0, 'f', 3));
-}
-
-void Viewer::keyPressEvent(QKeyEvent *e)
-{
-    switch (e->key()) {
-    case Qt::Key_F: doFit(); break;
-    case Qt::Key_T: opts_.travel = !opts_.travel; update(); break;
-    case Qt::Key_G: opts_.grid = !opts_.grid; update(); break;
-    case Qt::Key_R: load(path_); break;
-    default: QWidget::keyPressEvent(e);
-    }
 }

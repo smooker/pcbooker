@@ -4,6 +4,7 @@
 #include "hpgl.h"
 
 #include <QFileSystemWatcher>
+#include <QImage>
 #include <QPainterPath>
 #include <QPointF>
 #include <QString>
@@ -31,11 +32,25 @@ void draw(QPainter &g, const hpgl::Plot &p, const Paths &paths, double scale, QP
 void fit(const Paths &paths, QSize size, double &scale, QPointF &origin);
 QString summary(const hpgl::Plot &p);
 
+// whole plot rendered to an image of px on the long side, with the summary line on top
+QImage renderImage(const hpgl::Plot &p, const Paths &paths, int px, const QString &title,
+                   const DrawOpts &o = DrawOpts{});
+
 class Viewer : public QWidget {
     Q_OBJECT
 public:
     explicit Viewer(double units_per_mm, QWidget *parent = nullptr);
     bool load(const QString &path);
+    const QString &path() const { return path_; }
+    const DrawOpts &opts() const { return opts_; }
+    QImage image(int px) const { return renderImage(plot_, paths_, px, title(), opts_); }
+public slots:
+    void reload() { if (!path_.isEmpty()) load(path_); }
+    void fitView();
+    void zoomBy(double k);
+    void setTravel(bool on) { opts_.travel = on; update(); }
+    void setGrid(bool on) { opts_.grid = on; update(); }
+    void setUnitsPerMm(double u);
 signals:
     void status(const QString &s);
     void cursor(const QString &s);
@@ -45,9 +60,8 @@ protected:
     void wheelEvent(QWheelEvent *) override;
     void mousePressEvent(QMouseEvent *) override;
     void mouseMoveEvent(QMouseEvent *) override;
-    void keyPressEvent(QKeyEvent *) override;
 private:
-    void doFit();
+    QString title() const;
     hpgl::Plot plot_;
     Paths paths_;
     QString path_;

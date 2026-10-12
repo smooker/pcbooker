@@ -1,7 +1,7 @@
 // hpglview -- look at the HPGL pcbooker wrote, the way the laser will read it.
 //
-//   hpglview FILE                         window: wheel zoom, drag pan, F fit, T travel,
-//                                         G grid, R reload; reloads when the file changes
+//   hpglview [FILE]                       window with menus; wheel zoom, drag pan;
+//                                         reloads when the file changes
 //   hpglview --png OUT [--size PX] FILE   render to PNG, no display needed
 //   hpglview --stats FILE                 JSON stats on stdout
 //   --unit-per-mm N                       default 39.370 (0.0254 mm); 40 shows what a
@@ -9,14 +9,17 @@
 #include "hpgl.h"
 #include "view.h"
 
+#include <QActionGroup>
 #include <QApplication>
-#include <QFile>
+#include <QFileDialog>
 #include <QFileInfo>
+#include <QFontDatabase>
 #include <QGuiApplication>
-#include <QImage>
+#include <QKeySequence>
 #include <QLabel>
 #include <QMainWindow>
-#include <QPainter>
+#include <QMenuBar>
+#include <QMessageBox>
 #include <QStatusBar>
 #include <cstdio>
 #include <cstring>
@@ -26,7 +29,7 @@
 
 static int usage()
 {
-    std::fputs("usage: hpglview [--unit-per-mm N] FILE\n"
+    std::fputs("usage: hpglview [--unit-per-mm N] [FILE]\n"
                "       hpglview [--unit-per-mm N] --png OUT [--size PX] FILE\n"
                "       hpglview [--unit-per-mm N] --stats FILE\n",
                stderr);
@@ -44,10 +47,27 @@ static bool slurp(const char *path, std::string &out)
     return true;
 }
 
+// Terminus, bundled from pcbooker's fonts/ as a Qt resource (as pcbooker's own GUI does)
+static QFont terminus(int pt)
+{
+    static QString family;
+    if (family.isEmpty()) {
+        for (const char *f : {":/fonts/Terminus.ttf", ":/fonts/TerminusBold.ttf"}) {
+            int id = QFontDatabase::addApplicationFont(f);
+            if (id >= 0 && family.isEmpty())
+                family = QFontDatabase::applicationFontFamilies(id).value(0);
+        }
+    }
+    QFont font(family.isEmpty() ? QString("monospace") : family, pt);
+    font.setStyleHint(QFont::Monospace);
+    return font;
+}
+
 static int renderPng(int argc, char **argv, const char *file, const char *out, int px, double upmm)
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QGuiApplication app(argc, argv);
+    QGuiApplication::setFont(terminus(11));
     std::string text;
     if (!slurp(file, text)) {
         std::fprintf(stderr, "cannot read %s\n", file);
@@ -56,31 +76,71 @@ static int renderPng(int argc, char **argv, const char *file, const char *out, i
     hpgl::Plot p = hpgl::parse(text, upmm);
     Paths paths;
     paths.build(p);
-    // aspect of the plot, longest side = px, plus a strip for the summary line
-    QSizeF b = paths.bounds.size();
-    double ar = (b.width() > 0 && b.height() > 0) ? b.width() / b.height() : 1.0;
-    QSize area = ar >= 1 ? QSize(px, std::max(100, int(px / ar))) : QSize(std::max(100, int(px * ar)), px);
-    const int strip = 24;
-    QImage img(area.width(), area.height() + strip, QImage::Format_RGB32);
-    img.fill(Qt::white);
-    QPainter g(&img);
-    double scale;
-    QPointF origin;
-    fit(paths, area, scale, origin);
-    g.translate(0, strip);
-    draw(g, p, paths, scale, origin, area, DrawOpts{});
-    g.resetTransform();
-    g.fillRect(0, 0, img.width(), strip, QColor(245, 245, 245));
-    g.setPen(Qt::black);
-    g.drawText(QRect(6, 0, img.width() - 12, strip), Qt::AlignVCenter,
-               QFileInfo(file).fileName() + "  |  " + summary(p));
-    g.end();
-    if (!img.save(out)) {
+    if (!renderImage(p, paths, px, QFileInfo(file).fileName()).save(out)) {
         std::fprintf(stderr, "cannot write %s\n", out);
         return 1;
     }
     std::printf("%s\n", hpgl::stats_json(p).c_str());
     return 0;
+}
+
+static void buildMenus(QMainWindow &w, Viewer *v, double upmm)
+{
+    QMenu *file = w.menuBar()->addMenu("&File");
+    file->addAction("&Open...", QKeySequence::Open, &w, [&w, v] {
+        QString f = QFileDialog::getOpenFileName(&w, "Open HPGL", QFileInfo(v->path()).path(),
+                                                 "HPGL (*.hpgl *.plt *.hpg *.hgl);;All files (*)");
+        if (!f.isEmpty() && v->load(f))
+            w.setWindowTitle("hpglview - " + QFileInfo(f).fileName());
+    });
+    file->addAction("&Reload", QKeySequence(Qt::Key_R), v, &Viewer::reload);
+    file->addAction("&Export PNG...", QKeySequence("Ctrl+E"), &w, [&w, v] {
+        QString f = QFileDialog::getSaveFileName(&w, "Export PNG",
+                                                 QFileInfo(v->path()).completeBaseName() + ".png",
+                                                 "PNG (*.png)");
+        if (!f.isEmpty() && !v->image(3000).save(f))
+            QMessageBox::warning(&w, "hpglview", "cannot write " + f);
+    });
+    file->addSeparator();
+    file->addAction("&Quit", QKeySequence::Quit, &w, &QWidget::close);
+
+    QMenu *view = w.menuBar()->addMenu("&View");
+    view->addAction("&Fit", QKeySequence(Qt::Key_F), v, &Viewer::fitView);
+    view->addAction("Zoom &in", QKeySequence(Qt::Key_Plus), v, [v] { v->zoomBy(1.5); });
+    view->addAction("Zoom &out", QKeySequence(Qt::Key_Minus), v, [v] { v->zoomBy(1 / 1.5); });
+    view->addSeparator();
+    QAction *travel = view->addAction("&Travel moves", QKeySequence(Qt::Key_T), v, &Viewer::setTravel);
+    travel->setCheckable(true);
+    travel->setChecked(v->opts().travel);
+    QAction *grid = view->addAction("mm &grid", QKeySequence(Qt::Key_G), v, &Viewer::setGrid);
+    grid->setCheckable(true);
+    grid->setChecked(v->opts().grid);
+
+    QMenu *units = w.menuBar()->addMenu("&Units");
+    auto *g = new QActionGroup(&w);
+    struct U { const char *name; double upmm; };
+    for (U u : {U{"0.0254 mm/unit (TRUMPF, 1016/in)", hpgl::UNITS_PER_MM},
+                U{"0.025 mm/unit (40/mm)", 40.0}}) {
+        QAction *a = units->addAction(u.name, v, [v, x = u.upmm] { v->setUnitsPerMm(x); });
+        a->setCheckable(true);
+        a->setChecked(std::abs(u.upmm - upmm) < 1e-6);
+        g->addAction(a);
+    }
+
+    QMenu *help = w.menuBar()->addMenu("&Help");
+    help->addAction("&Keys", &w, [&w] {
+        QMessageBox::information(&w, "hpglview",
+                                 "wheel      zoom at the cursor\n"
+                                 "drag       pan\n"
+                                 "F          fit\n"
+                                 "+ / -      zoom in / out\n"
+                                 "T          travel moves on/off\n"
+                                 "G          mm grid on/off\n"
+                                 "R          reload (also automatic on change)\n"
+                                 "Ctrl+O     open\n"
+                                 "Ctrl+E     export PNG\n\n"
+                                 "red = pen down (cut), blue dashed = pen up (travel)");
+    });
 }
 
 int main(int argc, char **argv)
@@ -103,7 +163,7 @@ int main(int argc, char **argv)
         else
             file = argv[i];
     }
-    if (!file || upmm <= 0 || px < 100)
+    if (upmm <= 0 || px < 100 || ((stats || png) && !file))
         return usage();
 
     if (stats) {
@@ -122,14 +182,19 @@ int main(int argc, char **argv)
     QMainWindow w;
     auto *v = new Viewer(upmm);
     auto *pos = new QLabel;
+    QFont mono = terminus(12);
+    w.statusBar()->setFont(mono);
+    pos->setFont(mono);
+    pos->setMinimumWidth(QFontMetrics(mono).horizontalAdvance("-0000.000, -0000.000 mm"));
     w.setCentralWidget(v);
     w.statusBar()->addPermanentWidget(pos);
     QObject::connect(v, &Viewer::status, w.statusBar(), [&w](const QString &s) { w.statusBar()->showMessage(s); });
     QObject::connect(v, &Viewer::cursor, pos, &QLabel::setText);
-    w.setWindowTitle("hpglview - " + QFileInfo(file).fileName());
+    buildMenus(w, v, upmm);
+    w.setWindowTitle(file ? "hpglview - " + QFileInfo(file).fileName() : QString("hpglview"));
     w.resize(1200, 900);
     w.show();
-    if (!v->load(file))
+    if (file && !v->load(file))
         return 1;
     return app.exec();
 }

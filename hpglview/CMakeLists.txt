@@ -23,6 +23,12 @@ if(Qt6_FOUND)
     set(CMAKE_AUTOMOC ON)
     add_executable(hpglview main.cpp view.cpp)
     target_link_libraries(hpglview hpgl Qt6::Core Qt6::Gui Qt6::Widgets)
+    # Terminus from pcbooker's fonts/, for the status line and the PNG summary
+    qt_add_resources(hpglview fonts
+        PREFIX /fonts
+        BASE ${CMAKE_CURRENT_SOURCE_DIR}/../fonts
+        FILES ${CMAKE_CURRENT_SOURCE_DIR}/../fonts/Terminus.ttf
+              ${CMAKE_CURRENT_SOURCE_DIR}/../fonts/TerminusBold.ttf)
 else()
     message(STATUS "Qt6 not found: building the parser and tests only")
 endif()
