@@ -79,3 +79,23 @@ def test_lines_are_linestrings():
     assert lines and all(isinstance(l, LineString) for l in lines)
     for l in lines:
         assert box(0, 0, 3, 3).buffer(1e-6).contains(l)
+
+
+def test_board_from_outline_lines():
+    # an Edge.Cuts outline arrives as a thin buffered line; hatch stops at its inner edge
+    from hatch import board_from_outline
+    ring = box(0, 0, 20, 10).exterior.buffer(0.05)
+    b = board_from_outline(ring)
+    assert b.area == pytest.approx(19.9 * 9.9, rel=1e-3)
+    assert b.contains(box(1, 1, 19, 9))
+
+
+def test_board_from_outline_none():
+    from hatch import board_from_outline
+    assert board_from_outline(None) is None
+    assert board_from_outline(Polygon()) is None
+
+
+def test_board_from_outline_filled():
+    from hatch import board_from_outline
+    assert board_from_outline(box(0, 0, 5, 5)).area == pytest.approx(25.0)

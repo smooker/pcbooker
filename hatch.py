@@ -9,7 +9,7 @@ serpentine order (every other row reversed), so the travel between rows is short
 import math
 
 from shapely import affinity
-from shapely.geometry import LineString, box
+from shapely.geometry import LineString, Polygon, box
 
 
 def _row_segments(region, y, x0, x1):
@@ -79,3 +79,23 @@ def ablate_region(copper, offset_mm, board=None, margin_mm=1.0):
         board = box(minx - margin_mm, miny - margin_mm, maxx + margin_mm, maxy + margin_mm)
     keep = copper.buffer(offset_mm) if offset_mm > 0 else copper
     return board.difference(keep)
+
+
+def board_from_outline(outline):
+    """
+    Board area from an outline layer, for ablate_region(board=...).
+
+    An Edge.Cuts Gerber comes in as a thin ring (a buffered line): the board is the
+    largest hole, i.e. the inner edge of the cut line, so the hatch never burns on it.
+    A filled outline polygon is taken as it is. None when there is nothing usable.
+    """
+    if outline is None or outline.is_empty:
+        return None
+    polys = [outline] if isinstance(outline, Polygon) else [
+        g for g in getattr(outline, 'geoms', []) if isinstance(g, Polygon)]
+    holes = [Polygon(r) for p in polys for r in p.interiors]
+    if holes:
+        return max(holes, key=lambda h: h.area)
+    if polys:
+        return Polygon(max(polys, key=lambda p: p.area).exterior)
+    return None

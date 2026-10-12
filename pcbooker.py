@@ -37,6 +37,7 @@ import gerber_loader
 import isolation
 import contour_check
 import hpgl_export
+import hatch
 
 
 LAYER_COLORS = {
@@ -51,6 +52,11 @@ LAYER_COLORS = {
 }
 DEFAULT_COLOR = '#ff8800'
 ISOLATION_COLOR = '#00ff00'
+RASTER_COLOR = '#ff8800'
+
+# raster (hatch) modes: label -> (angle_deg, cross)
+RASTER_MODES = {'off': None, '0°': (0.0, False), '45°': (45.0, False),
+                '0°+90° cross': (0.0, True)}
 PROBLEM_COLOR = '#ff0000'
 
 
@@ -215,6 +221,7 @@ class PCBookerWindow(QMainWindow):
         self.problems = {}
         self.layer_widgets = {}
         self.iso_widgets = {}   # isolation layer widgets (separate)
+        self.raster_names = set()  # iso layers that are hatch fills (no dedup on export)
         self._last_clicked_iso = None  # for shift-select range
 
         self._build_ui()
@@ -300,6 +307,28 @@ class PCBookerWindow(QMainWindow):
             "Pen lifts near old paths, drops when clear. Prevents double laser pass.")
         dedup_frame.addWidget(self.spin_dedup)
         left_layout.addLayout(dedup_frame)
+
+        # Raster (hatch) fill of the copper to remove, on every Iso layer
+        raster_frame = QHBoxLayout()
+        raster_frame.addWidget(QLabel("Raster:"))
+        self.combo_raster = QComboBox()
+        self.combo_raster.addItems(list(RASTER_MODES))
+        self.combo_raster.setToolTip(
+            "Hatch the copper between the traces away (parallel lines).\n"
+            "0°: cleanest while the burn is at least as wide as the pitch.\n"
+            "45°: if the burn gets narrower, leaves short bits instead of\n"
+            "long copper strips. Cross: both, at twice the time.")
+        raster_frame.addWidget(self.combo_raster)
+        self.spin_raster_pitch = QDoubleSpinBox()
+        self.spin_raster_pitch.setRange(0.01, 1.0)
+        self.spin_raster_pitch.setSingleStep(0.005)
+        self.spin_raster_pitch.setDecimals(3)
+        self.spin_raster_pitch.setValue(0.045)
+        self.spin_raster_pitch.setSuffix(" mm")
+        self.spin_raster_pitch.setToolTip(
+            "Distance between hatch lines: a bit under the spot (50 um).")
+        raster_frame.addWidget(self.spin_raster_pitch)
+        left_layout.addLayout(raster_frame)
 
         left.setMinimumWidth(280)
         splitter.addWidget(left)
@@ -565,6 +594,7 @@ class PCBookerWindow(QMainWindow):
             self._layer_layout.removeWidget(w)
             w.deleteLater()
             self.iso_paths.pop(name, None)
+            self.raster_names.discard(name)
 
         self._last_clicked_iso = None
         self.statusBar().showMessage(f"Deleted {len(to_delete)} iso layer(s).")
@@ -577,6 +607,7 @@ class PCBookerWindow(QMainWindow):
             self._layer_layout.removeWidget(w)
             w.deleteLater()
         self.iso_widgets.clear()
+        self.raster_names.clear()
 
         count = 0
         selected = 0
@@ -637,6 +668,8 @@ class PCBookerWindow(QMainWindow):
                 count += n
                 print(f"    Added {n} paths as layer '{iso_name}'")
 
+            count += self._add_raster(name, merged, offset)
+
         if selected == 0:
             QMessageBox.information(self, "Isolation",
                                     "No layers have 'Iso' checked.\n\n"
@@ -650,6 +683,29 @@ class PCBookerWindow(QMainWindow):
             f"Generated {count} isolation paths from {selected} layer(s){gap_info}.")
         self.refresh_view()
 
+    def _add_raster(self, name, merged, offset):
+        """Hatch the copper-free area of one layer, as its own layer. Returns line count."""
+        mode = RASTER_MODES[self.combo_raster.currentText()]
+        if mode is None:
+            return 0
+        angle, cross = mode
+        pitch = self.spin_raster_pitch.value()
+        board = hatch.board_from_outline(self.merged.get('outline'))
+        self.statusBar().showMessage(f"Raster {name}...")
+        QApplication.processEvents()
+        region = hatch.ablate_region(merged, offset, board=board)
+        lines = hatch.hatch_lines(region, pitch, angle, cross)
+        if not lines:
+            return 0
+        raster_name = f"raster: {name}"
+        info = (f"{self.combo_raster.currentText()} pitch {pitch:.3f}mm, "
+                f"{sum(l.length for l in lines) / 1000:.1f} m"
+                f"{'' if board else ', bbox+1mm'}")
+        print(f"  Raster: {len(lines)} lines, {info}")
+        n = self._add_iso_layer(raster_name, lines, info, color=RASTER_COLOR)
+        self.raster_names.add(raster_name)
+        return n
+
     def export_hpgl(self):
         if not self.iso_paths:
             QMessageBox.warning(self, "Export",
@@ -662,15 +718,17 @@ class PCBookerWindow(QMainWindow):
         if not filepath:
             return
 
-        # Collect all visible paths
+        # Collect all visible paths; hatch lines go after the outlines, without dedup
+        # (they are closer together than the dedup distance on purpose)
         all_paths = []
+        raster_paths = []
         print(f"\n=== HPGL Export ===")
         for name, paths in self.iso_paths.items():
             iso_w = self.iso_widgets.get(name)
             if iso_w and not iso_w.cb_visible.isChecked():
                 print(f"  SKIP (hidden): {name}")
                 continue
-            all_paths.extend(paths)
+            (raster_paths if name in self.raster_names else all_paths).extend(paths)
             print(f"  Include: {name} — {len(paths)} paths")
 
         total_before = sum(
@@ -691,7 +749,7 @@ class PCBookerWindow(QMainWindow):
                   f"(saved {saved:.1f}mm = {saved/max(total_before,1)*100:.1f}%)")
 
         all_geoms = [p if isinstance(p, LineString) else LineString(p.coords)
-                     for p in all_paths]
+                     for p in all_paths] + raster_paths
 
         hpgl_export.export_hpgl(all_geoms, filepath)
         print(f"  Written: {filepath}")
@@ -718,8 +776,12 @@ class PCBookerWindow(QMainWindow):
             iso_w = self.iso_widgets.get(name)
             if iso_w and not iso_w.cb_visible.isChecked():
                 continue
-            plot_linestrings(self.ax, paths, color=ISOLATION_COLOR,
-                             linewidth=1.5, alpha=0.9)
+            if name in self.raster_names:
+                plot_linestrings(self.ax, paths, color=RASTER_COLOR,
+                                 linewidth=0.3, alpha=0.7)
+            else:
+                plot_linestrings(self.ax, paths, color=ISOLATION_COLOR,
+                                 linewidth=1.5, alpha=0.9)
 
         for name, probs in self.problems.items():
             for p in probs:
